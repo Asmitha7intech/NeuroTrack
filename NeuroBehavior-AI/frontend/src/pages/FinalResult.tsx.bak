@@ -1,0 +1,595 @@
+﻿import React, { useEffect, useMemo, useState } from "react";
+import {
+  BarChart,
+  Bar,
+  CartesianGrid,
+  XAxis,
+  YAxis,
+  Tooltip,
+  RadarChart,
+  PolarGrid,
+  PolarAngleAxis,
+  PolarRadiusAxis,
+  Radar,
+  ResponsiveContainer,
+} from "recharts";
+import { downloadPdfReport } from "../api";
+import HistoryAutoSaver from "../components/HistoryAutoSaver";
+
+type AnyObj = Record<string, any>;
+
+const getValue = (obj: AnyObj | null | undefined, keys: string[], fallback: any = 0) => {
+  if (!obj) return fallback;
+  for (const key of keys) {
+    if (obj[key] !== undefined && obj[key] !== null) return obj[key];
+  }
+  return fallback;
+};
+
+const FinalResult: React.FC = () => {
+  const [typingResult, setTypingResult] = useState<AnyObj | null>(null);
+  const [attentionResult, setAttentionResult] = useState<AnyObj | null>(null);
+  const [readingResult, setReadingResult] = useState<AnyObj | null>(null);
+
+  const [finalResult, setFinalResult] = useState<AnyObj | null>(null);
+  const [predictionResult, setPredictionResult] = useState<AnyObj | null>(null);
+
+  const [loading, setLoading] = useState(false);
+  const [mlLoading, setMlLoading] = useState(false);
+
+  const [chatQuestion, setChatQuestion] = useState("");
+  const [chatAnswer, setChatAnswer] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+
+  useEffect(() => {
+    const typing = localStorage.getItem("typingResult");
+    const attention = localStorage.getItem("attentionResult");
+    const reading = localStorage.getItem("readingResult");
+    const savedFinal = localStorage.getItem("finalResult");
+    const savedPrediction = localStorage.getItem("predictionResult");
+
+    setTypingResult(typing ? JSON.parse(typing) : null);
+    setAttentionResult(attention ? JSON.parse(attention) : null);
+    setReadingResult(reading ? JSON.parse(reading) : null);
+    setFinalResult(savedFinal ? JSON.parse(savedFinal) : null);
+    setPredictionResult(savedPrediction ? JSON.parse(savedPrediction) : null);
+  }, []);
+
+  useEffect(() => {
+    const fetchFinalAndPrediction = async () => {
+      if (!typingResult && !attentionResult && !readingResult) return;
+
+      const payload = {
+        typingResult,
+        attentionResult,
+        readingResult,
+      };
+
+      setLoading(true);
+      try {
+        const response = await fetch("http://127.0.0.1:8000/analyze-final", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(text);
+        }
+
+        const data = await response.json();
+        setFinalResult(data);
+        localStorage.setItem("finalResult", JSON.stringify(data));
+      } catch (error) {
+        console.error("Final result API error:", error);
+      } finally {
+        setLoading(false);
+      }
+
+      setMlLoading(true);
+      try {
+        const predictionResponse = await fetch("http://127.0.0.1:8000/predict-behavior", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+
+        if (!predictionResponse.ok) {
+          const text = await predictionResponse.text();
+          throw new Error(text);
+        }
+
+        const predictionData = await predictionResponse.json();
+        setPredictionResult(predictionData);
+        localStorage.setItem("predictionResult", JSON.stringify(predictionData));
+      } catch (error) {
+        console.error("ML prediction API error:", error);
+      } finally {
+        setMlLoading(false);
+      }
+    };
+
+    fetchFinalAndPrediction();
+  }, [typingResult, attentionResult, readingResult]);
+
+  const handleAskAssistant = async () => {
+    if (!chatQuestion.trim()) return;
+
+    setChatLoading(true);
+    setChatAnswer("");
+
+    try {
+      const response = await fetch("http://127.0.0.1:8000/chat-assistant", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          question: chatQuestion,
+          typingResult,
+          attentionResult,
+          readingResult,
+          finalResult,
+          mlResult: predictionResult,
+        }),
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text);
+      }
+
+      const data = await response.json();
+      setChatAnswer(getValue(data, ["answer"], "No response received."));
+    } catch (error) {
+      console.error("Chat assistant API error:", error);
+      setChatAnswer("Sorry, something went wrong while contacting the AI assistant.");
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
+  const handleDownloadReport = async () => {
+    try {
+      await downloadPdfReport({
+        typing_result: typingResult || {},
+        attention_result: attentionResult || {},
+        reading_result: readingResult || {},
+        final_result: finalResult || {},
+        prediction_result: predictionResult || {},
+      });
+    } catch (error) {
+      console.error("PDF download error:", error);
+      alert("Failed to download PDF report");
+    }
+  };
+
+  const overallScore = getValue(finalResult, ["overallScore", "overall_score"], 0);
+  const overallRisk = getValue(finalResult, ["overallRisk", "overall_risk"], "N/A");
+  const dominantConcernArea = getValue(
+    finalResult,
+    ["dominantConcernArea", "dominant_concern_area"],
+    "balanced"
+  );
+  const finalSummary = getValue(finalResult, ["finalSummary", "final_summary"], "");
+  const recommendation = getValue(finalResult, ["recommendation"], "");
+
+  const typingScore =
+    getValue(finalResult, ["typingScore", "typing_score"], null) ??
+    Math.min(
+      100,
+      Number(getValue(typingResult, ["accuracy"], 0)) * 0.7 +
+        Math.min(Number(getValue(typingResult, ["wpm"], 0)), 60) * 0.5
+    );
+
+  const attentionScore =
+    getValue(finalResult, ["attentionScore", "attention_score"], null) ??
+    Math.min(
+      100,
+      Number(getValue(attentionResult, ["attentionScore", "attention_score", "score"], 0))
+    );
+
+  const readingScore =
+    getValue(finalResult, ["readingScore", "reading_score"], null) ??
+    Math.min(
+      100,
+      Number(getValue(readingResult, ["comprehensionScore", "comprehension_score"], 0)) * 0.75 +
+        Math.min(Number(getValue(readingResult, ["readingSpeed", "reading_speed", "wpm"], 0)), 200) * 0.15
+    );
+
+  const barData = useMemo(
+    () => [
+      { name: "Typing", value: Number(typingScore || 0) },
+      { name: "Attention", value: Number(attentionScore || 0) },
+      { name: "Reading", value: Number(readingScore || 0) },
+    ],
+    [typingScore, attentionScore, readingScore]
+  );
+
+  const radarData = useMemo(
+    () => [
+      { subject: "Typing", value: Number(typingScore || 0), fullMark: 100 },
+      { subject: "Attention", value: Number(attentionScore || 0), fullMark: 100 },
+      { subject: "Reading", value: Number(readingScore || 0), fullMark: 100 },
+      { subject: "Focus", value: Number(attentionScore || 0), fullMark: 100 },
+      {
+        subject: "Speed",
+        value: Number(getValue(readingResult, ["readingSpeed", "reading_speed", "wpm"], 0)),
+        fullMark: 200,
+      },
+    ],
+    [typingScore, attentionScore, readingScore, readingResult]
+  );
+
+  const predictedRisk = getValue(predictionResult, ["predictedRisk", "predicted_risk"], "N/A");
+  const predictionConfidence = getValue(predictionResult, ["confidence"], 0);
+  const predictionSummary = getValue(predictionResult, ["summaryText", "summary_text"], "");
+  const predictionExplanation = getValue(predictionResult, ["explanation"], []);
+  const probabilities = getValue(predictionResult, ["probabilities"], {});
+
+  return (
+    <>
+      <HistoryAutoSaver />
+
+      <div className="min-h-screen bg-gray-100 p-5">
+        <div className="mx-auto max-w-6xl rounded-3xl bg-white shadow-lg">
+          <div className="rounded-t-3xl bg-gradient-to-r from-indigo-600 via-violet-600 to-fuchsia-600 p-6 text-white">
+            <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-widest">NeuroBehavior AI Report</p>
+                <h1 className="text-5xl font-bold">Final Result</h1>
+                <p className="mt-2 text-sm">
+                  Consolidated interpretation of typing behavior, attention control, reading
+                  comprehension, ML prediction, and AI-assisted support.
+                </p>
+              </div>
+
+              <button
+                onClick={handleDownloadReport}
+                className="rounded-xl bg-white px-5 py-3 font-semibold text-indigo-700 shadow"
+              >
+                Download PDF Report
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-5 p-5 lg:grid-cols-3">
+            <div className="rounded-2xl border-2 border-gray-800 p-5 lg:col-span-2">
+              <p className="text-xs text-gray-500">Overall Performance Score</p>
+              <div className="mt-2 flex items-center gap-4">
+                <span className="text-6xl font-bold text-violet-600">{overallScore}%</span>
+                <span className="rounded-full bg-rose-100 px-3 py-1 text-sm font-semibold text-rose-600">
+                  {overallRisk}
+                </span>
+              </div>
+
+              <p className="mt-5 text-gray-700">{loading ? "Loading report..." : finalSummary}</p>
+
+              <div className="mt-5 inline-block rounded-full border-2 border-gray-800 px-4 py-2 text-sm font-semibold">
+                Dominant Concern Area: {dominantConcernArea}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border-2 border-gray-800 p-5">
+              <h2 className="text-2xl font-bold">Report Status</h2>
+
+              <div className="mt-4 space-y-3">
+                <div className="rounded-xl border-2 border-gray-800 p-3">
+                  <p className="text-xs text-gray-500">Modules Completed</p>
+                  <p className="text-2xl font-bold text-blue-700">
+                    {[typingResult, attentionResult, readingResult].filter(Boolean).length}/3
+                  </p>
+                </div>
+
+                <div className="rounded-xl border-2 border-gray-800 p-3">
+                  <p className="text-xs text-gray-500">Typing Module</p>
+                  <p className="font-semibold text-green-600">{typingResult ? "Available" : "Missing"}</p>
+                </div>
+
+                <div className="rounded-xl border-2 border-gray-800 p-3">
+                  <p className="text-xs text-gray-500">Attention Module</p>
+                  <p className="font-semibold text-green-600">{attentionResult ? "Available" : "Missing"}</p>
+                </div>
+
+                <div className="rounded-xl border-2 border-gray-800 p-3">
+                  <p className="text-xs text-gray-500">Reading Module</p>
+                  <p className="font-semibold text-green-600">{readingResult ? "Available" : "Missing"}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border-2 border-gray-800 p-5">
+              <h2 className="mb-4 text-2xl font-bold">Module Score Comparison</h2>
+              <div className="h-72">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={barData}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="name" />
+                    <YAxis domain={[0, 100]} />
+                    <Tooltip />
+                    <Bar dataKey="value" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border-2 border-gray-800 p-5 lg:col-span-2">
+              <h2 className="mb-4 text-2xl font-bold">Performance Radar</h2>
+              <div className="h-72">
+                <ResponsiveContainer width="100%" height="100%">
+                  <RadarChart data={radarData}>
+                    <PolarGrid />
+                    <PolarAngleAxis dataKey="subject" />
+                    <PolarRadiusAxis />
+                    <Radar dataKey="value" fillOpacity={0.4} />
+                  </RadarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border-2 border-gray-800 p-5 lg:col-span-3">
+              <h2 className="mb-4 text-2xl font-bold">Risk Overview</h2>
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                <div className="rounded-xl bg-blue-50 p-4">
+                  <p className="text-xs text-gray-500">Typing Risk</p>
+                  <span className="mt-2 inline-block rounded-full bg-green-100 px-3 py-1 text-sm font-semibold text-green-700">
+                    {getValue(typingResult, ["riskLevel", "risk_level"], "N/A")}
+                  </span>
+                </div>
+
+                <div className="rounded-xl bg-fuchsia-50 p-4">
+                  <p className="text-xs text-gray-500">Attention Risk</p>
+                  <span className="mt-2 inline-block rounded-full bg-green-100 px-3 py-1 text-sm font-semibold text-green-700">
+                    {getValue(attentionResult, ["riskLevel", "risk_level"], "N/A")}
+                  </span>
+                </div>
+
+                <div className="rounded-xl bg-emerald-50 p-4">
+                  <p className="text-xs text-gray-500">Reading Risk</p>
+                  <span className="mt-2 inline-block rounded-full bg-rose-100 px-3 py-1 text-sm font-semibold text-rose-700">
+                    {getValue(
+                      readingResult,
+                      ["readingRisk", "reading_risk", "riskLevel", "risk_level"],
+                      "N/A"
+                    )}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border-2 border-gray-800 p-5">
+              <div className="flex items-center justify-between">
+                <h2 className="text-3xl font-bold text-blue-700">Typing Analysis</h2>
+                <span className="rounded-full bg-blue-100 px-3 py-1 text-xs font-bold text-blue-700">
+                  Module 1
+                </span>
+              </div>
+
+              <div className="mt-4 grid grid-cols-2 gap-3">
+                <div className="rounded-xl border-2 border-gray-800 p-3">
+                  <p className="text-xs text-gray-500">WPM</p>
+                  <p className="text-3xl font-bold text-blue-700">{getValue(typingResult, ["wpm"], 0)}</p>
+                </div>
+                <div className="rounded-xl border-2 border-gray-800 p-3">
+                  <p className="text-xs text-gray-500">Accuracy</p>
+                  <p className="text-3xl font-bold text-blue-700">
+                    {getValue(typingResult, ["accuracy"], 0)}%
+                  </p>
+                </div>
+                <div className="col-span-2 rounded-xl border-2 border-gray-800 p-3">
+                  <p className="text-xs text-gray-500">Errors</p>
+                  <p className="text-3xl font-bold text-gray-800">{getValue(typingResult, ["errors"], 0)}</p>
+                </div>
+              </div>
+
+              <div className="mt-4 inline-block rounded-full bg-green-100 px-3 py-1 text-sm font-semibold text-green-700">
+                {getValue(typingResult, ["riskLevel", "risk_level"], "N/A")} Risk
+              </div>
+
+              <div className="mt-4 rounded-xl border-2 border-gray-800 p-3">
+                <p className="text-xs text-gray-500">Summary</p>
+                <p className="mt-2 text-sm text-gray-700">
+                  {getValue(typingResult, ["summaryText", "summary_text"], "")}
+                </p>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border-2 border-gray-800 p-5">
+              <div className="flex items-center justify-between">
+                <h2 className="text-3xl font-bold text-fuchsia-700">Attention Analysis</h2>
+                <span className="rounded-full bg-fuchsia-100 px-3 py-1 text-xs font-bold text-fuchsia-700">
+                  Module 2
+                </span>
+              </div>
+
+              <div className="mt-4 grid grid-cols-2 gap-3">
+                <div className="rounded-xl border-2 border-gray-800 p-3">
+                  <p className="text-xs text-gray-500">Attention Score</p>
+                  <p className="text-3xl font-bold text-fuchsia-700">
+                    {getValue(attentionResult, ["attentionScore", "attention_score", "score"], 0)}
+                  </p>
+                </div>
+                <div className="rounded-xl border-2 border-gray-800 p-3">
+                  <p className="text-xs text-gray-500">Reaction Time</p>
+                  <p className="text-3xl font-bold text-fuchsia-700">
+                    {getValue(attentionResult, ["reactionTime", "reaction_time"], 0)} ms
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                <span className="rounded-full bg-orange-100 px-3 py-1 text-sm font-semibold text-orange-700">
+                  Focus: {getValue(attentionResult, ["focusLevel", "focus_level"], "N/A")}
+                </span>
+                <span className="rounded-full bg-green-100 px-3 py-1 text-sm font-semibold text-green-700">
+                  Impulsivity: {getValue(attentionResult, ["impulsivityLevel", "impulsivity_level"], "N/A")}
+                </span>
+              </div>
+
+              <div className="mt-4 inline-block rounded-full bg-green-100 px-3 py-1 text-sm font-semibold text-green-700">
+                {getValue(attentionResult, ["riskLevel", "risk_level"], "N/A")} Risk
+              </div>
+
+              <div className="mt-4 rounded-xl border-2 border-gray-800 p-3">
+                <p className="text-xs text-gray-500">Summary</p>
+                <p className="mt-2 text-sm text-gray-700">
+                  {getValue(
+                    attentionResult,
+                    ["summaryText", "summary_text", "behaviorSummary", "behavior_summary"],
+                    ""
+                  )}
+                </p>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border-2 border-gray-800 p-5">
+              <div className="flex items-center justify-between">
+                <h2 className="text-3xl font-bold text-emerald-700">Reading Analysis</h2>
+                <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-700">
+                  Module 3
+                </span>
+              </div>
+
+              <div className="mt-4 grid grid-cols-2 gap-3">
+                <div className="rounded-xl border-2 border-gray-800 p-3">
+                  <p className="text-xs text-gray-500">Reading Speed</p>
+                  <p className="text-3xl font-bold text-emerald-700">
+                    {getValue(readingResult, ["readingSpeed", "reading_speed", "wpm"], 0)} WPM
+                  </p>
+                </div>
+                <div className="rounded-xl border-2 border-gray-800 p-3">
+                  <p className="text-xs text-gray-500">Comprehension</p>
+                  <p className="text-3xl font-bold text-emerald-700">
+                    {getValue(readingResult, ["comprehensionScore", "comprehension_score"], 0)}%
+                  </p>
+                </div>
+                <div className="col-span-2 rounded-xl border-2 border-gray-800 p-3">
+                  <p className="text-xs text-gray-500">Correct Answers</p>
+                  <p className="text-3xl font-bold text-gray-800">
+                    {getValue(readingResult, ["correctAnswers", "correct_answers"], 0)}/3
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-4 inline-block rounded-full bg-rose-100 px-3 py-1 text-sm font-semibold text-rose-700">
+                {getValue(
+                  readingResult,
+                  ["readingRisk", "reading_risk", "riskLevel", "risk_level"],
+                  "N/A"
+                )}{" "}
+                Risk
+              </div>
+
+              <div className="mt-4 rounded-xl border-2 border-gray-800 p-3">
+                <p className="text-xs text-gray-500">Summary</p>
+                <p className="mt-2 text-sm text-gray-700">
+                  {getValue(readingResult, ["summaryText", "summary_text"], "")}
+                </p>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border-2 border-gray-800 p-5 lg:col-span-3">
+              <h2 className="text-2xl font-bold">ML Prediction</h2>
+
+              {mlLoading ? (
+                <p className="mt-3 text-gray-700">Loading ML prediction...</p>
+              ) : (
+                <>
+                  <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-4">
+                    <div className="rounded-xl bg-violet-50 p-4">
+                      <p className="text-xs text-gray-500">Predicted Risk</p>
+                      <p className="mt-2 text-2xl font-bold text-violet-700">{predictedRisk}</p>
+                    </div>
+
+                    <div className="rounded-xl bg-blue-50 p-4">
+                      <p className="text-xs text-gray-500">Confidence</p>
+                      <p className="mt-2 text-2xl font-bold text-blue-700">{predictionConfidence}%</p>
+                    </div>
+
+                    <div className="rounded-xl bg-green-50 p-4">
+                      <p className="text-xs text-gray-500">Low Probability</p>
+                      <p className="mt-2 text-xl font-bold text-green-700">
+                        {getValue(probabilities, ["Low", "low"], 0)}%
+                      </p>
+                    </div>
+
+                    <div className="rounded-xl bg-rose-50 p-4">
+                      <p className="text-xs text-gray-500">High Probability</p>
+                      <p className="mt-2 text-xl font-bold text-rose-700">
+                        {getValue(probabilities, ["High", "high"], 0)}%
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 rounded-xl border-2 border-gray-800 p-4">
+                    <p className="text-xs text-gray-500">Prediction Summary</p>
+                    <p className="mt-2 text-sm text-gray-700">{predictionSummary}</p>
+                  </div>
+
+                  <div className="mt-4 rounded-xl border-2 border-gray-800 p-4">
+                    <p className="text-xs text-gray-500">AI Explanation</p>
+                    {Array.isArray(predictionExplanation) && predictionExplanation.length > 0 ? (
+                      <ul className="mt-2 list-disc pl-5 text-sm text-gray-700">
+                        {predictionExplanation.map((item: any, index: number) => (
+                          <li key={index}>
+                            {typeof item === "string" ? item : JSON.stringify(item)}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="mt-2 text-sm text-gray-700">No explanation available.</p>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="rounded-2xl border-2 border-gray-800 p-5 lg:col-span-3">
+              <h2 className="text-2xl font-bold">AI Chat Assistant</h2>
+              <p className="mt-2 text-sm text-gray-600">
+                Ask about your typing, attention, reading, final report, ML prediction, or improvement tips.
+              </p>
+
+              <div className="mt-4 flex flex-col gap-3 md:flex-row">
+                <input
+                  type="text"
+                  value={chatQuestion}
+                  onChange={(e) => setChatQuestion(e.target.value)}
+                  placeholder="Example: How can I improve my attention score?"
+                  className="flex-1 rounded-xl border-2 border-gray-800 px-4 py-3 outline-none"
+                />
+                <button
+                  onClick={handleAskAssistant}
+                  disabled={chatLoading}
+                  className="rounded-xl bg-indigo-600 px-5 py-3 font-semibold text-white disabled:opacity-60"
+                >
+                  {chatLoading ? "Asking..." : "Ask AI"}
+                </button>
+              </div>
+
+              <div className="mt-4 rounded-xl border-2 border-gray-800 p-4">
+                <p className="text-xs text-gray-500">Assistant Response</p>
+                <p className="mt-2 text-sm text-gray-700">
+                  {chatAnswer || "No question asked yet."}
+                </p>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border-2 border-gray-800 p-5 lg:col-span-3">
+              <h2 className="text-2xl font-bold">Final Recommendation</h2>
+              <p className="mt-3 text-gray-700">{recommendation}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+};
+
+export default FinalResult;

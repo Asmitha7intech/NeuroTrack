@@ -1,0 +1,429 @@
+﻿from io import BytesIO
+from typing import Any, Dict
+
+from fastapi import Body, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+
+from app.database import Base, engine
+from app.routes.auth import router as auth_router
+from app.routes.history import router as history_router
+
+app = FastAPI(title="NeuroBehavior AI Backend")
+
+# Create database tables for auth + history
+Base.metadata.create_all(bind=engine)
+
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "*",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+def get_value(obj: Dict[str, Any] | None, keys: list[str], fallback: Any = 0) -> Any:
+    if not obj:
+        return fallback
+    for key in keys:
+        if key in obj and obj[key] is not None:
+            return obj[key]
+    return fallback
+
+
+def to_float(value: Any, fallback: float = 0.0) -> float:
+    try:
+        if isinstance(value, str):
+            value = value.replace("%", "").strip()
+        return float(value)
+    except Exception:
+        return fallback
+
+
+def clamp(value: float, low: float = 0.0, high: float = 100.0) -> float:
+    return max(low, min(high, value))
+
+
+@app.get("/")
+def root():
+    return {"message": "NeuroBehavior AI Backend Running"}
+
+
+@app.post("/analyze-typing")
+def analyze_typing(payload: dict = Body(...)):
+    wpm = to_float(get_value(payload, ["wpm", "speed"], 0))
+    accuracy = to_float(get_value(payload, ["accuracy"], 0))
+    errors = to_float(get_value(payload, ["errors", "errorCount", "error_count"], 0))
+    backspace_count = to_float(get_value(payload, ["backspaceCount", "backspace_count"], 0))
+
+    if accuracy >= 95 and errors <= 2 and wpm >= 20:
+        risk_level = "Low"
+    elif accuracy >= 80:
+        risk_level = "Medium"
+    else:
+        risk_level = "High"
+
+    summary = (
+        f"Typing performance shows {round(wpm, 2)} WPM with {round(accuracy, 2)}% accuracy, "
+        f"{int(errors)} errors, and {int(backspace_count)} backspaces."
+    )
+
+    return {
+        "wpm": round(wpm, 2),
+        "accuracy": round(accuracy, 2),
+        "errors": int(errors),
+        "backspaceCount": int(backspace_count),
+        "backspace_count": int(backspace_count),
+        "riskLevel": risk_level,
+        "risk_level": risk_level,
+        "summaryText": summary,
+        "summary_text": summary,
+    }
+
+
+@app.post("/analyze-attention")
+def analyze_attention(payload: dict = Body(...)):
+    score = to_float(get_value(payload, ["attentionScore", "attention_score", "score"], 0))
+    reaction_time = to_float(get_value(payload, ["reactionTime", "reaction_time"], 0))
+    wrong = to_float(get_value(payload, ["wrong", "wrongClicks", "wrong_clicks"], 0))
+    misses = to_float(get_value(payload, ["misses"], 0))
+
+    if score >= 80 and reaction_time <= 1200:
+        risk_level = "Low"
+        focus_level = "Good"
+        impulsivity_level = "Low"
+    elif score >= 50:
+        risk_level = "Medium"
+        focus_level = "Moderate"
+        impulsivity_level = "Moderate"
+    else:
+        risk_level = "High"
+        focus_level = "Low"
+        impulsivity_level = "High"
+
+    summary = (
+        f"Attention score is {round(score, 2)} with reaction time {round(reaction_time, 2)} ms, "
+        f"{int(wrong)} wrong responses, and {int(misses)} misses."
+    )
+
+    return {
+        "attentionScore": round(score, 2),
+        "attention_score": round(score, 2),
+        "score": round(score, 2),
+        "reactionTime": round(reaction_time, 2),
+        "reaction_time": round(reaction_time, 2),
+        "wrong": int(wrong),
+        "misses": int(misses),
+        "focusLevel": focus_level,
+        "focus_level": focus_level,
+        "impulsivityLevel": impulsivity_level,
+        "impulsivity_level": impulsivity_level,
+        "riskLevel": risk_level,
+        "risk_level": risk_level,
+        "summaryText": summary,
+        "summary_text": summary,
+        "behaviorSummary": summary,
+        "behavior_summary": summary,
+    }
+
+
+@app.post("/analyze-reading")
+def analyze_reading(payload: dict = Body(...)):
+    reading_speed = to_float(get_value(payload, ["readingSpeed", "reading_speed", "wpm"], 0))
+    comprehension = to_float(get_value(payload, ["comprehensionScore", "comprehension_score"], 0))
+    correct_answers = int(to_float(get_value(payload, ["correctAnswers", "correct_answers"], 0)))
+    total_questions = int(to_float(get_value(payload, ["totalQuestions", "total_questions"], 3), 3))
+
+    if comprehension >= 80:
+        reading_risk = "Low"
+    elif comprehension >= 50:
+        reading_risk = "Medium"
+    else:
+        reading_risk = "High"
+
+    summary = (
+        f"Reading speed is {round(reading_speed, 2)} WPM with comprehension {round(comprehension, 2)}%. "
+        f"Correct answers: {correct_answers}/{total_questions}."
+    )
+
+    return {
+        "readingSpeed": round(reading_speed, 2),
+        "reading_speed": round(reading_speed, 2),
+        "wpm": round(reading_speed, 2),
+        "comprehensionScore": round(comprehension, 2),
+        "comprehension_score": round(comprehension, 2),
+        "correctAnswers": correct_answers,
+        "correct_answers": correct_answers,
+        "totalQuestions": total_questions,
+        "total_questions": total_questions,
+        "readingRisk": reading_risk,
+        "reading_risk": reading_risk,
+        "riskLevel": reading_risk,
+        "risk_level": reading_risk,
+        "summaryText": summary,
+        "summary_text": summary,
+    }
+
+
+@app.post("/analyze-final")
+def analyze_final(payload: dict = Body(...)):
+    typing = payload.get("typingResult") or payload.get("typing_result") or {}
+    attention = payload.get("attentionResult") or payload.get("attention_result") or {}
+    reading = payload.get("readingResult") or payload.get("reading_result") or {}
+
+    typing_score = clamp(
+        to_float(get_value(typing, ["accuracy"], 0)) * 0.7
+        + min(to_float(get_value(typing, ["wpm", "speed"], 0)), 60) * 0.5
+    )
+    attention_score = clamp(
+        to_float(get_value(attention, ["attentionScore", "attention_score", "score"], 0))
+    )
+    reading_score = clamp(
+        to_float(get_value(reading, ["comprehensionScore", "comprehension_score"], 0)) * 0.75
+        + min(to_float(get_value(reading, ["readingSpeed", "reading_speed", "wpm"], 0)), 200) * 0.15
+    )
+
+    overall_score = round((typing_score + attention_score + reading_score) / 3, 2)
+
+    module_scores = {
+        "typing": typing_score,
+        "attention": attention_score,
+        "reading": reading_score,
+    }
+    dominant_concern_area = min(module_scores, key=module_scores.get)
+
+    if overall_score >= 75:
+        overall_risk = "Low"
+    elif overall_score >= 45:
+        overall_risk = "Medium"
+    else:
+        overall_risk = "High"
+
+    final_summary = (
+        f"Combined screening score is {overall_score}%. "
+        f"Lowest-performing domain is {dominant_concern_area}."
+    )
+
+    recommendation_map = {
+        "typing": "Practice short guided typing drills focusing on accuracy before speed.",
+        "attention": "Use brief focus-training sessions and reduce distractions during tasks.",
+        "reading": "Practice timed reading with short comprehension checks after each passage.",
+    }
+
+    return {
+        "overallScore": overall_score,
+        "overall_score": overall_score,
+        "overallRisk": overall_risk,
+        "overall_risk": overall_risk,
+        "dominantConcernArea": dominant_concern_area,
+        "dominant_concern_area": dominant_concern_area,
+        "typingScore": round(typing_score, 2),
+        "typing_score": round(typing_score, 2),
+        "attentionScore": round(attention_score, 2),
+        "attention_score": round(attention_score, 2),
+        "readingScore": round(reading_score, 2),
+        "reading_score": round(reading_score, 2),
+        "finalSummary": final_summary,
+        "final_summary": final_summary,
+        "recommendation": recommendation_map[dominant_concern_area],
+    }
+
+
+@app.post("/predict-behavior")
+def predict_behavior(payload: dict = Body(...)):
+    typing = payload.get("typingResult") or payload.get("typing_result") or {}
+    attention = payload.get("attentionResult") or payload.get("attention_result") or {}
+    reading = payload.get("readingResult") or payload.get("reading_result") or {}
+
+    wpm = to_float(get_value(typing, ["wpm", "speed"], 0))
+    accuracy = to_float(get_value(typing, ["accuracy"], 0))
+    errors = to_float(get_value(typing, ["errors", "errorCount", "error_count"], 0))
+    attention_score = to_float(get_value(attention, ["attentionScore", "attention_score", "score"], 0))
+    reaction_time = to_float(get_value(attention, ["reactionTime", "reaction_time"], 0))
+    reading_speed = to_float(get_value(reading, ["readingSpeed", "reading_speed", "wpm"], 0))
+    comprehension = to_float(get_value(reading, ["comprehensionScore", "comprehension_score"], 0))
+    correct_answers = to_float(get_value(reading, ["correctAnswers", "correct_answers"], 0))
+
+    risk_points = 0
+    explanation = []
+
+    if accuracy < 85:
+        risk_points += 2
+        explanation.append("Typing accuracy is below the expected threshold.")
+    elif accuracy < 95:
+        risk_points += 1
+        explanation.append("Typing accuracy is slightly reduced.")
+
+    if wpm < 15:
+        risk_points += 2
+        explanation.append("Typing speed is very low.")
+    elif wpm < 25:
+        risk_points += 1
+        explanation.append("Typing speed is below average.")
+
+    if errors > 10:
+        risk_points += 2
+        explanation.append("Typing error count is high.")
+    elif errors > 3:
+        risk_points += 1
+        explanation.append("Typing error count is mildly elevated.")
+
+    if attention_score < 40:
+        risk_points += 2
+        explanation.append("Attention score is low.")
+    elif attention_score < 70:
+        risk_points += 1
+        explanation.append("Attention score is moderate.")
+
+    if reaction_time > 1800:
+        risk_points += 2
+        explanation.append("Reaction time is very slow.")
+    elif reaction_time > 1200:
+        risk_points += 1
+        explanation.append("Reaction time is slightly slow.")
+
+    if comprehension < 40:
+        risk_points += 2
+        explanation.append("Reading comprehension is low.")
+    elif comprehension < 70:
+        risk_points += 1
+        explanation.append("Reading comprehension is moderate.")
+
+    if reading_speed < 80:
+        risk_points += 2
+        explanation.append("Reading speed is very low.")
+    elif reading_speed < 120:
+        risk_points += 1
+        explanation.append("Reading speed is below average.")
+
+    if correct_answers <= 1:
+        risk_points += 1
+        explanation.append("Few reading questions were answered correctly.")
+
+    if risk_points <= 2:
+        predicted_risk = "Low"
+        probabilities = {"Low": 78, "Medium": 18, "High": 4}
+        confidence = 78
+    elif risk_points <= 5:
+        predicted_risk = "Medium"
+        probabilities = {"Low": 18, "Medium": 68, "High": 14}
+        confidence = 68
+    else:
+        predicted_risk = "High"
+        probabilities = {"Low": 6, "Medium": 24, "High": 70}
+        confidence = 70
+
+    if not explanation:
+        explanation.append("All module indicators are within expected ranges.")
+
+    summary_text = (
+        f"The behavioral screening result suggests {predicted_risk.lower()} risk "
+        f"with {confidence}% confidence based on typing, attention, and reading patterns."
+    )
+
+    return {
+        "predictedRisk": predicted_risk,
+        "predicted_risk": predicted_risk,
+        "confidence": confidence,
+        "probabilities": probabilities,
+        "summaryText": summary_text,
+        "summary_text": summary_text,
+        "explanation": explanation,
+    }
+
+
+@app.post("/chat-assistant")
+def chat_assistant(payload: dict = Body(...)):
+    question = payload.get("question", "")
+    final_result = payload.get("finalResult") or payload.get("final_result") or {}
+    ml_result = payload.get("mlResult") or payload.get("ml_result") or {}
+
+    dominant = get_value(final_result, ["dominantConcernArea", "dominant_concern_area"], "general")
+    risk = get_value(ml_result, ["predictedRisk", "predicted_risk"], "Unknown")
+    confidence = get_value(ml_result, ["confidence"], 0)
+
+    q = question.lower()
+    if "attention" in q:
+        answer = (
+            f"Your attention-related indicators suggest {risk.lower()} risk with about {confidence}% confidence. "
+            f"Try shorter focus intervals, remove distractions, and repeat the attention module over time."
+        )
+    elif "typing" in q:
+        answer = "Typing can improve by focusing on steady accuracy first and then gradually increasing speed."
+    elif "reading" in q:
+        answer = "Reading performance can improve through timed passage practice and short comprehension reviews."
+    else:
+        answer = (
+            f"Based on the current report, the main concern area is {dominant} and the overall predicted risk is {risk}."
+        )
+
+    return {"answer": answer}
+
+
+@app.post("/generate-report")
+def generate_report(payload: dict = Body(...)):
+    buffer = BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+
+    y = height - 50
+    pdf.setFont("Helvetica-Bold", 18)
+    pdf.drawString(40, y, "NeuroBehavior AI Report")
+    y -= 30
+
+    pdf.setFont("Helvetica", 11)
+    sections = [
+        ("Typing Result", payload.get("typing_result", {})),
+        ("Attention Result", payload.get("attention_result", {})),
+        ("Reading Result", payload.get("reading_result", {})),
+        ("Final Result", payload.get("final_result", {})),
+        ("Prediction Result", payload.get("prediction_result", {})),
+    ]
+
+    for title, content in sections:
+        pdf.setFont("Helvetica-Bold", 13)
+        pdf.drawString(40, y, title)
+        y -= 18
+        pdf.setFont("Helvetica", 10)
+
+        if not content:
+            pdf.drawString(50, y, "No data available")
+            y -= 18
+        else:
+            for key, value in content.items():
+                pdf.drawString(50, y, f"{key}: {value}"[:110])
+                y -= 14
+                if y < 60:
+                    pdf.showPage()
+                    y = height - 50
+                    pdf.setFont("Helvetica", 10)
+
+        y -= 10
+        if y < 60:
+            pdf.showPage()
+            y = height - 50
+            pdf.setFont("Helvetica", 10)
+
+    pdf.save()
+    buffer.seek(0)
+
+    return StreamingResponse(
+        buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": 'attachment; filename="neurobehavior_report.pdf"'},
+    )
+
+
+# Auth + History routes
+app.include_router(auth_router)
+app.include_router(history_router)

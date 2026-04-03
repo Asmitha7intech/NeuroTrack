@@ -1,0 +1,30 @@
+﻿import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
+import Navbar from "./components/Navbar";
+import Home from "./pages/Home";
+import TypingTest from "./pages/TypingTest";
+import AttentionTest from "./pages/AttentionTest";
+import ReadingTest from "./pages/ReadingTest";
+import Dashboard from "./pages/Dashboard";
+import FinalResult from "./pages/FinalResult";
+import History from "./pages/History";
+
+function App() {
+  return (
+    <Router>
+      <div className="min-h-screen bg-gray-200">
+        <Navbar />
+        <Routes>
+          <Route path="/" element={<Home />} />
+          <Route path="/typing-test" element={<TypingTest />} />
+          <Route path="/attention-test" element={<AttentionTest />} />
+          <Route path="/reading-test" element={<ReadingTest />} />
+          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/final-result" element={<FinalResult />} />
+          <Route path="/history" element={<History />} />
+        </Routes>
+      </div>
+    </Router>
+  );
+}
+
+export default App;
